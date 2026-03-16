@@ -2,8 +2,8 @@
 .devcontainer/
 build/
 
-# TODO: lvgl should be added as a submodule and ignored here
 components/
+managed_components/
 
 sdkconfig
 sdkconfig.esp32-s3-devkitc-1

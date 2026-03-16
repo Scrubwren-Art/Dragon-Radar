@@ -4,14 +4,15 @@ dependencies:
       type: idf
     version: 5.5.3
   lvgl/lvgl:
+    component_hash: 2567762b19953712ee38789ad8f8de57ad1f6e39283adefbbfc7184ffe662831
     dependencies: []
     source:
-      path: /Users/darrian/SynologyDrive/workspace/DragonFinder/components/lvgl__lvgl
-      type: local
+      registry_url: https://components.espressif.com/
+      type: service
     version: 8.2.0
 direct_dependencies:
 - idf
 - lvgl/lvgl
-manifest_hash: 7bf1fb2108074131d59b17ccc7087a480d4e6f0c05824312faeffc8b6bc2915d
+manifest_hash: 0cc956a415379fe58bd10637e996dc028dfd50ce4f1ad884c1ff265dfd794439
 target: esp32s3
 version: 2.0.0
