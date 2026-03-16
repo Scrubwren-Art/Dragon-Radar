@@ -2,6 +2,8 @@
 
 A prop replica of the Dragon Radar from _Dragon Ball Z_, built on an ESP32-S3 with a 480x480 RGB LCD display. The radar displays a rotating grid with animated target detection, gyroscope-based heading tracking, and buzzer feedback when targets are detected.
 
+Most of the driver and peripheral code is derived from the example code provided in the [Waveshare ESP32-S3-LCD-2.8C wiki](https://www.waveshare.com/wiki/ESP32-S3-LCD-2.8C).
+
 | Supported Targets |
 | ----------------- |
 | ESP32-S3          |
