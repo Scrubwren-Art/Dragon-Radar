@@ -2,7 +2,6 @@
   "C_Cpp.intelliSenseEngine": "default",
   "idf.adapterTargetName": "esp32s3",
   "idf.openOcdConfigs": ["board/esp32s3-builtin.cfg"],
-  "idf.portWin": "COM52",
   "files.associations": {
     "vernon_st7701s.h": "c",
     "gpio.h": "c",
@@ -58,11 +57,7 @@
     "sd_mmc.h": "c"
   },
   "idf.flashType": "UART",
-  "idf.currentSetup": "/Users/darrian/.espressif/v5.5.3/esp-idf",
-  "idf.port": "/dev/tty.usbmodem1101",
-  "idf.monitorPort": "/dev/tty.usbmodem1101",
   "idf.customExtraVars": {
-    "OPENOCD_USB_ADAPTER_LOCATION": "1-1",
     "IDF_TARGET": "esp32s3"
   }
 }
