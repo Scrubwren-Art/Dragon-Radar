@@ -40,7 +40,11 @@ Hardware design files are in the [hardware/](hardware/) directory.
 
 ## Build and Flash
 
-### PlatformIO (recommended)
+### VSCode + PlatformIO extension (recommended)
+
+Install the [PlatformIO IDE extension](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide) for VSCode. Once installed, open this repository as a folder and use the PlatformIO toolbar at the bottom of the window to **Build**, **Upload**, and open the **Serial Monitor** — no terminal commands needed.
+
+### PlatformIO CLI
 
 ```bash
 pio run -e esp32-s3-devkitc-1 -t upload
