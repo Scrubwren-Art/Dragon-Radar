@@ -20,11 +20,11 @@ static bool display_active = true;
 static uint32_t last_activity_time = 0;
 static PressEvent last_button_state = NONE_PRESS;
 
-extern PressEvent BOOT_KEY_State;  /* From Button_Driver.h */
+extern PressEvent BOOT_KEY_State; /* From Button_Driver.h */
 
 void Driver_Loop(void *parameter)
 {
-    while(1)
+    while (1)
     {
         QMI8658_Loop();
         RTC_Loop();
@@ -40,14 +40,14 @@ void Driver_Init(void)
     I2C_Init();
     PCF85063_Init();
     QMI8658_Init();
-    EXIO_Init();                    // Example Initialize EXIO
+    EXIO_Init(); // Example Initialize EXIO
     xTaskCreatePinnedToCore(
-        Driver_Loop, 
+        Driver_Loop,
         "Other Driver task",
-        4096, 
-        NULL, 
-        3, 
-        NULL, 
+        4096,
+        NULL,
+        3,
+        NULL,
         0);
 }
 void app_main(void)
@@ -58,11 +58,11 @@ void app_main(void)
     LCD_Init();
     // SD_Init();  /* Disabled: SD card not needed */
     LVGL_Init();
-/********************* Demo *********************/
+    /********************* Demo *********************/
     grid_screen_show();
     /* Start radar scan effect at boot */
     grid_screen_start_scan();
-    grid_screen_update();  /* Initialize scan state */
+    grid_screen_update(); /* Initialize scan state */
     last_activity_time = lv_tick_get();
 
     // lv_demo_widgets();
@@ -72,34 +72,40 @@ void app_main(void)
     // lv_demo_music();
 
     // Simulated_Touch_Init();  /* Disabled: touch simulation not needed */
-    while (1) {
+    while (1)
+    {
         uint32_t current_time = lv_tick_get();
 
         /* Handle display timeout (30 seconds of inactivity) */
-        if (display_active) {
+        if (display_active)
+        {
             uint32_t idle_time = current_time - last_activity_time;
-            if (idle_time > 30000) {  /* 30 seconds */
-                Set_Backlight(0);  /* Turn off backlight */
+            if (idle_time > 30000)
+            {                     /* 30 seconds */
+                Set_Backlight(0); /* Turn off backlight */
                 display_active = false;
                 printf("Display OFF\n");
             }
         }
 
-
         /* Handle button press to wake display */
-        if (BOOT_KEY_State != last_button_state && BOOT_KEY_State != NONE_PRESS) {
+        if (BOOT_KEY_State != last_button_state && BOOT_KEY_State != NONE_PRESS)
+        {
             printf("Button state changed: %d\n", BOOT_KEY_State);
-            if (!display_active) {
+            if (!display_active)
+            {
                 /* Wake display and restart scan */
                 display_active = true;
-                Set_Backlight(100);  /* Turn on full brightness */
-                grid_screen_start_scan();  /* Restart scan effect */
-                grid_screen_update();  /* Initialize scan state */
+                Set_Backlight(100);       /* Turn on full brightness */
+                grid_screen_start_scan(); /* Restart scan effect */
+                grid_screen_update();     /* Initialize scan state */
                 last_activity_time = current_time;
                 printf("Display ON - restarted scan\n");
-            } else {
+            }
+            else
+            {
                 // last_activity_time = current_time;
-                Set_Backlight(0);  /* Turn off backlight */
+                Set_Backlight(0); /* Turn off backlight */
                 display_active = false;
                 printf("Display OFF\n");
             }
@@ -107,7 +113,8 @@ void app_main(void)
         last_button_state = BOOT_KEY_State;
 
         /* Update radar if display is active or dissolving */
-        if (display_active) {
+        if (display_active)
+        {
             // Update radar heading from gyro rotation
             grid_screen_update();
         }
