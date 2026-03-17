@@ -82,10 +82,10 @@ static void draw_center_triangle(lv_draw_ctx_t *draw_ctx, int cx, int cy, int si
 	int x1 = cx; /* Top */
 	int y1 = (int)(cy - height / 2);
 
-	int x2 = (int)(cx - size / 2); /* Bottom-left */
+	int x2 = (int)(cx - size * 0.75f); /* Bottom-left */
 	int y2 = (int)(cy + height / 2);
 
-	int x3 = (int)(cx + size / 2); /* Bottom-right */
+	int x3 = (int)(cx + size * 0.75f); /* Bottom-right */
 	int y3 = (int)(cy + height / 2);
 
 	/* Draw filled triangle using scanlines */
@@ -477,8 +477,8 @@ void grid_screen_update(void)
 			// Do a beep when each new dot appears (optional, can be commented out if not desired)
 			if (new_dot_count > visible_dot_count)
 			{
-				Buzzer_On();
-				buzzer_on_time = current_time; /* Will be turned off in main loop after short duration */
+				/*Buzzer_On();
+				buzzer_on_time = current_time; Will be turned off in main loop after short duration */
 			}
 
 			visible_dot_count = new_dot_count;
