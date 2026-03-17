@@ -88,26 +88,36 @@ void app_main(void)
             }
         }
 
-        /* Handle button press to wake display */
+        /* Handle button events */
         if (BOOT_KEY_State != last_button_state && BOOT_KEY_State != NONE_PRESS)
         {
-            printf("Button state changed: %d\n", BOOT_KEY_State);
-            if (!display_active)
+            if (BOOT_KEY_State == LONG_PRESS_START)
             {
-                /* Wake display and restart scan */
-                display_active = true;
-                Set_Backlight(100);       /* Turn on full brightness */
-                grid_screen_start_scan(); /* Restart scan effect */
-                grid_screen_update();     /* Initialize scan state */
-                last_activity_time = current_time;
-                printf("Display ON - restarted scan\n");
+                printf("Long press detected\n");
+                if (!display_active)
+                {
+                    /* Wake display and restart scan */
+                    display_active = true;
+                    Set_Backlight(100);       /* Turn on full brightness */
+                    grid_screen_start_scan(); /* Restart scan effect */
+                    grid_screen_update();     /* Initialize scan state */
+                    last_activity_time = current_time;
+                    printf("Display ON - restarted scan\n");
+                }
+                else
+                {
+                    Set_Backlight(0); /* Turn off backlight */
+                    display_active = false;
+                    printf("Display OFF\n");
+                }
             }
-            else
+            else if (BOOT_KEY_State == SINGLE_CLICK)
             {
-                // last_activity_time = current_time;
-                Set_Backlight(0); /* Turn off backlight */
-                display_active = false;
-                printf("Display OFF\n");
+                printf("Single click detected - zooming radar\n");
+                if (display_active)
+                {
+                    grid_screen_zoom_increment();
+                }
             }
         }
         last_button_state = BOOT_KEY_State;
