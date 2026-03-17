@@ -44,13 +44,20 @@ void Button_LONG_PRESS_START_Callback(void* btn){
     BOOT_KEY_State= LONG_PRESS_START;                
   }
 }
+void Button_PRESS_UP_Callback(void* btn){
+  struct Button *user_button = (struct Button *)btn;
+  if(user_button == &BUTTON1){
+    BOOT_KEY_State = NONE_PRESS;
+  }
+}
 void button_Init(void)
 {
   ESP32_Button_init();   
   button_init(&BUTTON1, Read_Button_GPIO_Level, 0 , 0);  
   button_attach(&BUTTON1, SINGLE_CLICK, Button_SINGLE_CLICK_Callback);      
   button_attach(&BUTTON1, DOUBLE_CLICK, Button_DOUBLE_CLICK_Callback);          
-  button_attach(&BUTTON1, LONG_PRESS_START, Button_LONG_PRESS_START_Callback); 
+  button_attach(&BUTTON1, LONG_PRESS_START, Button_LONG_PRESS_START_Callback);
+  button_attach(&BUTTON1, PRESS_UP, Button_PRESS_UP_Callback); 
 
   const esp_timer_create_args_t clock_tick_timer_args = 
   {
