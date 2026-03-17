@@ -2,15 +2,16 @@
 #include "QMI8658.h"
 #include "Buzzer.h"
 #include <math.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
 #define ROWS 10
 #define COLS 10
-#define NUM_TARGETS 8
+#define NUM_TARGETS 7
 #define MAX_DISTANCE 50.0f
-#define DOT_SIZE_MIN 3
+#define DOT_SIZE_MIN 8
 #define DOT_SIZE_MAX 15
 
 /* Static variables for grid state */
@@ -24,6 +25,10 @@ static uint32_t buzzer_on_time = 0;	 /* When buzzer was turned on for dot appear
 
 /* Radar targets - positions will be randomized on init */
 static radar_target_t radar_targets[NUM_TARGETS];
+
+/* Zoom state for radar */
+static int zoom_level = 0; /* 0=default, 1=25%, 2=50%, 3=75% */
+static uint32_t zoom_beep_time = 0; /* When zoom beep was triggered */
 
 /* Helper: Convert radians to degrees */
 static inline float rad_to_deg(float rad)
@@ -152,21 +157,31 @@ static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
 	if (dot_size < DOT_SIZE_MIN)
 		dot_size = DOT_SIZE_MIN;
 
-	/* Color based on center distance: closer to center (0.0) = whiter, farther (1.0) = more yellow */
-	uint8_t brightness = (uint8_t)(255.0f * (1.0f - normalized_dist));
+	/* Color: bright orange closer to center, bright yellow at edges */
+	lv_color_t dot_color;
+	if (normalized_dist < 0.5f)
+	{
+		/* Center: bright orange */
+		dot_color = lv_color_hex(0xFF9000);
+	}
+	else
+	{
+		/* Edges: bright yellow (avoids blue tint) */
+		dot_color = lv_color_hex(0xFFEAA00);
+	}
 
 	/* Draw circle using rect with circular radius */
 	lv_draw_rect_dsc_t rect_dsc;
 	lv_draw_rect_dsc_init(&rect_dsc);
 	rect_dsc.radius = LV_RADIUS_CIRCLE; /* Make it circular */
 	rect_dsc.bg_opa = LV_OPA_COVER;
-	rect_dsc.bg_color = lv_color_hex(0xFFFF00 | brightness); /* Yellow to white gradient */
+	rect_dsc.bg_color = dot_color;
 	rect_dsc.border_width = 0;
 
-	/* Much enhanced shadow for extreme fuzziness effect */
-	rect_dsc.shadow_width = 30; /* Large blur radius */
-	rect_dsc.shadow_color = lv_color_hex(0xFFFF00 | brightness);
-	rect_dsc.shadow_opa = LV_OPA_80; /* Very opaque shadow */
+	/* Enhanced glow/shadow effect with higher opacity for brightness */
+	rect_dsc.shadow_width = 40; /* Larger blur radius for more glow */
+	rect_dsc.shadow_color = dot_color;
+	rect_dsc.shadow_opa = LV_OPA_90; /* More opaque shadow for brighter glow */
 	rect_dsc.shadow_ofs_x = 0;
 	rect_dsc.shadow_ofs_y = 0;
 
@@ -180,6 +195,57 @@ static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
 	lv_draw_rect(draw_ctx, &rect_dsc, &area);
 }
 
+/* Helper: Draw a dotted line from one point to another with animation */
+static void draw_dotted_line(lv_draw_ctx_t *draw_ctx, int x1, int y1, int x2, int y2, lv_color_t color)
+{
+	int dx = x2 - x1;
+	int dy = y2 - y1;
+	float distance = sqrtf((float)(dx * dx + dy * dy));
+	
+	if (distance < 1.0f)
+		return;
+	
+	/* Normalize direction vector */
+	float dir_x = dx / distance;
+	float dir_y = dy / distance;
+	
+	/* Get current time for animation (pulsing effect) */
+	uint32_t current_time = lv_tick_get();
+	float animation_offset = ((current_time / 250) % 14) / 14.0f * distance; /* Complete cycle every ~3500ms */
+	
+	/* Dotted line: 8 pixels on, 6 pixels off */
+	float pos = -animation_offset;
+	lv_draw_line_dsc_t line_dsc;
+	lv_draw_line_dsc_init(&line_dsc);
+	line_dsc.color = color;
+	line_dsc.width = 2;
+	
+	while (pos < distance)
+	{
+		float seg_start = pos;
+		float seg_end = pos + 8.0f;
+		if (seg_end > distance)
+			seg_end = distance;
+		
+		if (seg_start < 0.0f)
+			seg_start = 0.0f;
+		
+		if (seg_start < seg_end)
+		{
+			int px1 = (int)(x1 + dir_x * seg_start);
+			int py1 = (int)(y1 + dir_y * seg_start);
+			int px2 = (int)(x1 + dir_x * seg_end);
+			int py2 = (int)(y1 + dir_y * seg_end);
+			
+			lv_point_t p1 = {(lv_coord_t)px1, (lv_coord_t)py1};
+			lv_point_t p2 = {(lv_coord_t)px2, (lv_coord_t)py2};
+			lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
+		}
+		
+		pos += 14.0f; /* 8 on + 6 off */
+	}
+}
+
 /* Draw callback for the grid and radar dots */
 static void draw_grid_and_radar_cb(lv_event_t *e)
 {
@@ -188,6 +254,17 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 
 	int scr_w = lv_obj_get_width(obj);
 	int scr_h = lv_obj_get_height(obj);
+
+	/* Calculate zoom-dependent grid spacing */
+	float zoom_multiplier = 1.0f + (zoom_level * 0.25f);
+	float base_spacing_x = (float)scr_w / COLS;
+	float base_spacing_y = (float)scr_h / ROWS;
+	float zoomed_spacing_x = base_spacing_x * zoom_multiplier;
+	float zoomed_spacing_y = base_spacing_y * zoom_multiplier;
+
+	/* Calculate offset to keep grid centered when zoomed */
+	float offset_x = (scr_w - (COLS * zoomed_spacing_x)) / 2.0f;
+	float offset_y = (scr_h - (ROWS * zoomed_spacing_y)) / 2.0f;
 
 	/* Draw grid lines */
 	lv_draw_line_dsc_t line_dsc;
@@ -198,16 +275,18 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 	/* Vertical lines */
 	for (int i = 0; i <= COLS; ++i)
 	{
-		lv_point_t p1 = {(lv_coord_t)((i * scr_w) / COLS), 0};
-		lv_point_t p2 = {(lv_coord_t)((i * scr_w) / COLS), (lv_coord_t)(scr_h - 1)};
+		float x_pos = offset_x + (i * zoomed_spacing_x);
+		lv_point_t p1 = {(lv_coord_t)x_pos, 0};
+		lv_point_t p2 = {(lv_coord_t)x_pos, (lv_coord_t)(scr_h - 1)};
 		lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
 	}
 
 	/* Horizontal lines */
 	for (int j = 0; j <= ROWS; ++j)
 	{
-		lv_point_t p1 = {0, (lv_coord_t)((j * scr_h) / ROWS)};
-		lv_point_t p2 = {(lv_coord_t)(scr_w - 1), (lv_coord_t)((j * scr_h) / ROWS)};
+		float y_pos = offset_y + (j * zoomed_spacing_y);
+		lv_point_t p1 = {0, (lv_coord_t)y_pos};
+		lv_point_t p2 = {(lv_coord_t)(scr_w - 1), (lv_coord_t)y_pos};
 		lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
 	}
 
@@ -233,6 +312,12 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 		}
 	}
 
+	/* Track the closest dot for drawing a line from center */
+	int closest_dot_idx = -1;
+	float closest_distance = FLT_MAX;
+	int closest_px = 0, closest_py = 0;
+	lv_color_t closest_color = lv_color_hex(0xFFDD00);
+
 	/* Render dots from farthest to closest (so close dots appear on top) */
 	for (int idx = 0; idx < NUM_TARGETS; ++idx)
 	{
@@ -254,9 +339,28 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 		/* Map from world coordinates (-50 to +50) to display pixels
 		 * Center at screen center, scale to fit
 		 * Approximately 1/5 of screen width/height is the visible range */
-		float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.8f;
+		float zoom_multiplier = 1.0f + (zoom_level * 0.25f); /* 1.0, 1.25, 1.5, 1.75 */
+		float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.8f * zoom_multiplier;
 		int px = scr_w / 2 + (int)(x * scale);
 		int py = scr_h / 2 - (int)(y * scale); /* Negative because Y grows downward */
+
+		/* Track closest dot (by world-space distance to origin) */
+		float world_dist_sq = radar_targets[i].x * radar_targets[i].x + radar_targets[i].y * radar_targets[i].y;
+		if (world_dist_sq < closest_distance)
+		{
+			closest_distance = world_dist_sq;
+			closest_dot_idx = i;
+			closest_px = px;
+			closest_py = py;
+			/* Determine color based on normalized_dist from center */
+			float normalized_dist = sqrtf((float)(px - scr_w/2) * (px - scr_w/2) + (float)(py - scr_h/2) * (py - scr_h/2)) / 
+									 sqrtf((float)(scr_w/2) * (scr_w/2) + (float)(scr_h/2) * (scr_h/2));
+			if (normalized_dist > 1.0f) normalized_dist = 1.0f;
+			if (normalized_dist < 0.5f)
+				closest_color = lv_color_hex(0xFFAA00);
+			else
+				closest_color = lv_color_hex(0xFFDD00);
+		}
 
 		/* Clamp to screen bounds */
 		if (px < 0)
@@ -270,6 +374,12 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 
 		/* Draw the fuzzy yellow dot at exact pixel coordinates */
 		draw_fuzzy_dot(draw_ctx, px, py, distance);
+	}
+
+	/* Draw dotted line from center to closest dot (only after scan completes) */
+	if (closest_dot_idx >= 0 && !in_scan_mode)
+	{
+		draw_dotted_line(draw_ctx, scr_w / 2, scr_h / 2, closest_px, closest_py, closest_color);
 	}
 
 	/* Draw red triangle at center */
@@ -318,6 +428,13 @@ void grid_screen_update(void)
 	{
 		Buzzer_Off();
 		buzzer_on_time = 0;
+	}
+
+	/* Turn off zoom beep buzzer after 150ms for a deeper sound */
+	if (zoom_beep_time > 0 && (current_time - zoom_beep_time) > 150)
+	{
+		Buzzer_Off();
+		zoom_beep_time = 0;
 	}
 
 	/* Update on subsequent calls (skip first call to avoid huge jumps) */
@@ -387,4 +504,15 @@ void grid_screen_start_scan(void)
 bool grid_screen_is_scan_complete(void)
 {
 	return !in_scan_mode;
+}
+
+/* Increment zoom level and cycle through: 0->1->2->3->0 */
+void grid_screen_zoom_increment(void)
+{
+	zoom_level = (zoom_level + 1) % 4;
+	printf("Zoom level: %d (%.2fx)\n", zoom_level, 1.0f + (zoom_level * 0.25f));
+	/* Play deep buzzer beep for zoom */
+	Buzzer_On();
+	zoom_beep_time = lv_tick_get();
+	lv_obj_invalidate(grid_screen); /* Redraw with new zoom */
 }

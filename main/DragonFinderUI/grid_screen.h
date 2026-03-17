@@ -15,5 +15,6 @@ void grid_screen_show(void);
 void grid_screen_update(void);
 void grid_screen_start_scan(void);
 bool grid_screen_is_scan_complete(void);
+void grid_screen_zoom_increment(void);
 
 #endif
