@@ -1,6 +1,7 @@
 #include "grid_screen.h"
 #include "QMI8658.h"
 #include "Buzzer.h"
+#include "BAT_Driver.h"
 #include <math.h>
 #include <float.h>
 #include <stdio.h>
@@ -16,6 +17,9 @@
 
 /* Static variables for grid state */
 static lv_obj_t *grid_screen = NULL;
+static lv_obj_t *battery_label = NULL;
+static lv_obj_t *battery_container = NULL;
+static int smoothed_battery_pct = -1;
 static float current_heading = 0.0f;
 static uint32_t last_update_time = 0;
 static int visible_dot_count = 0;		 /* Number of dots to show in scan mode */
@@ -407,6 +411,27 @@ void grid_screen_show(void)
 	/* Attach draw callback to render grid and radar */
 	lv_obj_add_event_cb(grid_screen, draw_grid_and_radar_cb, LV_EVENT_DRAW_MAIN, NULL);
 
+	/* Create battery container with background color and border */
+	battery_container = lv_obj_create(grid_screen);
+	lv_obj_set_size(battery_container, 70, 28);
+	lv_obj_set_pos(battery_container, (lv_coord_t)((lv_disp_get_hor_res(NULL) - 70) / 2), 10);
+	lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x003300), 0);
+	lv_obj_set_style_bg_opa(battery_container, LV_OPA_COVER, 0);
+	lv_obj_set_style_border_color(battery_container, lv_color_hex(0x000000), 0);
+	lv_obj_set_style_border_width(battery_container, 2, 0);
+	lv_obj_set_style_radius(battery_container, 0, 0);
+	lv_obj_set_style_outline_width(battery_container, 0, 0);
+	lv_obj_set_style_shadow_width(battery_container, 0, 0);
+	lv_obj_set_style_pad_all(battery_container, 0, 0);
+	lv_obj_clear_flag(battery_container, LV_OBJ_FLAG_SCROLLABLE);
+
+	/* Create battery percentage label inside container */
+	battery_label = lv_label_create(battery_container);
+	lv_label_set_text(battery_label, "--%");
+	lv_obj_set_style_text_color(battery_label, lv_color_hex(0x000000), 0);
+	lv_obj_set_style_text_font(battery_label, &lv_font_montserrat_16, 0);
+	lv_obj_center(battery_label);
+
 	/* Make it the active screen */
 	lv_scr_load(grid_screen);
 
@@ -483,6 +508,49 @@ void grid_screen_update(void)
 
 			visible_dot_count = new_dot_count;
 		}
+	}
+
+	/* Update battery percentage display */
+	if (battery_label != NULL)
+	{
+		float voltage = BAT_Get_Volts();
+		static char bat_text[12];
+		
+		/* Show "Charging" if voltage >= 4.15V (charging voltage) */
+		if (voltage >= 4.15f)
+		{
+			snprintf(bat_text, sizeof(bat_text), "Charging");
+			lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x003300), 0);
+			smoothed_battery_pct = -1;
+		}
+		else
+		{
+			float min_voltage = 3.0f;
+			float max_voltage = 3.7f;
+			int target_percentage = (int)((voltage - min_voltage) / (max_voltage - min_voltage) * 100.0f);
+			if (target_percentage < 0) target_percentage = 0;
+			if (target_percentage > 100) target_percentage = 100;
+
+			/* Interpolate towards target percentage (smoothing) */
+			if (smoothed_battery_pct < 0)
+				smoothed_battery_pct = target_percentage;
+			else
+				smoothed_battery_pct = smoothed_battery_pct + (target_percentage - smoothed_battery_pct) / 4;
+
+			int display_pct = smoothed_battery_pct;
+			snprintf(bat_text, sizeof(bat_text), "%d%%", display_pct);
+
+			/* Set box color based on percentage */
+			lv_color_t box_color;
+			if (display_pct >= 50)
+				box_color = lv_color_hex(0x003300); /* Green */
+			else if (display_pct >= 20)
+				box_color = lv_color_hex(0xFFA500); /* Orange */
+			else
+				box_color = lv_color_hex(0xFF0000); /* Red */
+			lv_obj_set_style_bg_color(battery_container, box_color, 0);
+		}
+		lv_label_set_text(battery_label, bat_text);
 	}
 
 	/* Invalidate screen to trigger redraw */
