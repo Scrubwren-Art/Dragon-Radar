@@ -3,6 +3,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 #include "TCA9554PWR.h"
 #include "PCF85063.h"
 #include "QMI8658.h"
@@ -17,6 +19,7 @@
 
 /* Display power state */
 static bool display_active = true;
+static bool in_sleep_mode = false;
 static uint32_t last_activity_time = 0;
 static PressEvent last_button_state = NONE_PRESS;
 
@@ -76,16 +79,41 @@ void app_main(void)
     {
         uint32_t current_time = lv_tick_get();
 
-        /* Handle display timeout (30 seconds of inactivity) */
-        if (display_active)
+        /* Handle display timeout (30 seconds of inactivity) - enter sleep mode */
+        if (display_active && !in_sleep_mode)
         {
             uint32_t idle_time = current_time - last_activity_time;
             if (idle_time > 30000)
             {                     /* 30 seconds */
-                Set_Backlight(0); /* Turn off backlight */
+                /* Enter light sleep mode to save power */
+                Set_Backlight(0);      /* Turn off backlight */
+                BLE_Disable();         /* Disable BLE to save power */
+                
+                /* Configure GPIO wake-up on button press (GPIO 0 = low) */
+                gpio_wakeup_enable(BOOT_KEY_PIN, GPIO_INTR_LOW_LEVEL);
+                esp_sleep_enable_gpio_wakeup();
+                
                 display_active = false;
-                printf("Display OFF\n");
+                in_sleep_mode = true;
+                
+                /* Enter light sleep - will wake on GPIO 0 low (button press) */
+                esp_light_sleep_start();
+                
+                /* After wake-up: backlight off, wait for button press to turn on display */
             }
+        }
+
+        /* Check if woken from sleep */
+        if (in_sleep_mode && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO)
+        {
+            /* Button was pressed - wake up! */
+            in_sleep_mode = false;
+            display_active = true;
+            Set_Backlight(100);        /* Turn on full brightness */
+            grid_screen_start_scan();    /* Restart scan effect */
+            grid_screen_update();       /* Initialize scan state */
+            BLE_Enable();              /* Re-enable BLE */
+            last_activity_time = lv_tick_get();
         }
 
         /* Handle button events */
@@ -93,27 +121,26 @@ void app_main(void)
         {
             if (BOOT_KEY_State == LONG_PRESS_START)
             {
-                printf("Long press detected\n");
-                if (!display_active)
+                if (!display_active && !in_sleep_mode)
                 {
-                    /* Wake display and restart scan */
+                    /* Turn on display */
                     display_active = true;
                     Set_Backlight(100);       /* Turn on full brightness */
-                    grid_screen_start_scan(); /* Restart scan effect */
-                    grid_screen_update();     /* Initialize scan state */
-                    last_activity_time = current_time;
-                    printf("Display ON - restarted scan\n");
+                    grid_screen_start_scan();   /* Restart scan effect */
+                    grid_screen_update();      /* Initialize scan state */
+                    BLE_Enable();             /* Re-enable BLE */
+                    last_activity_time = lv_tick_get();
                 }
-                else
+                else if (display_active)
                 {
-                    Set_Backlight(0); /* Turn off backlight */
+                    /* Turn off display - enter sleep mode */
+                    Set_Backlight(0);
                     display_active = false;
-                    printf("Display OFF\n");
+                    BLE_Disable();
                 }
             }
             else if (BOOT_KEY_State == SINGLE_CLICK)
             {
-                printf("Single click detected - zooming radar\n");
                 if (display_active)
                 {
                     grid_screen_zoom_increment();
@@ -122,16 +149,42 @@ void app_main(void)
         }
         last_button_state = BOOT_KEY_State;
 
-        /* Update radar if display is active or dissolving */
+        /* Update radar if display is active */
         if (display_active)
         {
-            // Update radar heading from gyro rotation
             grid_screen_update();
         }
 
-        // raise the task priority of LVGL and/or reduce the handler period can improve the performance
+        /* Light sleep: enter sleep when display is off */
+        if (!display_active && !in_sleep_mode)
+        {
+            /* Configure GPIO wake-up */
+            gpio_wakeup_enable(BOOT_KEY_PIN, GPIO_INTR_LOW_LEVEL);
+            esp_sleep_enable_gpio_wakeup();
+            in_sleep_mode = true;
+            
+            /* Enter light sleep */
+            esp_light_sleep_start();
+            
+            /* Woken up - reset state */
+            if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO)
+            {
+                /* Short press - turn on display */
+                display_active = true;
+                Set_Backlight(100);
+                grid_screen_start_scan();
+                grid_screen_update();
+                BLE_Enable();
+                last_activity_time = lv_tick_get();
+            }
+            in_sleep_mode = false;
+        }
+
+        /* Update LVGL */
+        if (display_active)
+        {
+            lv_timer_handler();
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
-        // The task running lv_timer_handler should have lower priority than that running `lv_tick_inc`
-        lv_timer_handler();
     }
 }

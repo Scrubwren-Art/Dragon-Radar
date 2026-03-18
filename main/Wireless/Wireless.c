@@ -119,7 +119,7 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
                         ble_devices[num_ble_devices].rssi = param->scan_rst.rssi;
                         ble_devices[num_ble_devices].found = true;
                         num_ble_devices++;
-                        printf("BLE[%d] RSSI: %d\n", num_ble_devices, param->scan_rst.rssi);
+                        // printf("BLE[%d] RSSI: %d\n", num_ble_devices, param->scan_rst.rssi);
                     }
                 }
                 BLE_NUM++;
@@ -153,6 +153,12 @@ void BLE_Init(void *arg)
         printf("%s enable bluetooth failed: %s\n", __func__, esp_err_to_name(ret));             
         return;}
 
+    /* Set BLE device name to "Dragon Radar" */
+    ret = esp_ble_gap_set_device_name("Dragon Radar");
+    if (ret) {
+        printf("%s set device name failed: %s\n", __func__, esp_err_to_name(ret));
+    }
+
     //register the  callback function to the gap module
     ret = esp_ble_gap_register_callback(esp_gap_cb);                                            
     if (ret){
@@ -179,15 +185,26 @@ uint16_t BLE_Scan(void)
     };
     ESP_ERROR_CHECK(esp_ble_gap_set_scan_params(&scan_params));
 
-    printf("Starting BLE scan...\n");
+    // printf("Starting BLE scan...\n");
     ESP_ERROR_CHECK(esp_ble_gap_start_scanning(SCAN_DURATION));
     
     // Set scanning duration
     vTaskDelay(SCAN_DURATION * 2000 / portTICK_PERIOD_MS);
     
-    printf("Stopping BLE scan...\n");
+    // printf("Stopping BLE scan...\n");
     ESP_ERROR_CHECK(esp_ble_gap_stop_scanning());
     BLE_Scan_Finish = 1;
     Scan_finish = 1;
     return BLE_NUM;
+}
+
+void BLE_Enable(void)
+{
+    esp_ble_gap_start_scanning(SCAN_DURATION);
+}
+
+void BLE_Disable(void)
+{
+    esp_ble_gap_stop_scanning();
+    BLE_Reset_Beacon();
 }

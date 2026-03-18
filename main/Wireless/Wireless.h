@@ -28,3 +28,5 @@ int BLE_Get_Device_RSSI(int index);
 int BLE_Get_Num_Devices(void);
 bool BLE_Is_Device_Found(int index);
 void BLE_Reset_Beacon(void);
+void BLE_Enable(void);
+void BLE_Disable(void);
