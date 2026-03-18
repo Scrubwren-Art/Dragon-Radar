@@ -30,3 +30,5 @@ bool BLE_Is_Device_Found(int index);
 void BLE_Reset_Beacon(void);
 void BLE_Enable(void);
 void BLE_Disable(void);
+void BLE_Start_Advertising(void);
+void BLE_Stop_Advertising(void);

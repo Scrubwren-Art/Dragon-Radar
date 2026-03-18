@@ -159,6 +159,9 @@ void BLE_Init(void *arg)
         printf("%s set device name failed: %s\n", __func__, esp_err_to_name(ret));
     }
 
+    /* Start advertising as "Dragon Radar" beacon */
+    BLE_Start_Advertising();
+
     //register the  callback function to the gap module
     ret = esp_ble_gap_register_callback(esp_gap_cb);                                            
     if (ret){
@@ -201,10 +204,64 @@ uint16_t BLE_Scan(void)
 void BLE_Enable(void)
 {
     esp_ble_gap_start_scanning(SCAN_DURATION);
+    BLE_Start_Advertising();
 }
 
 void BLE_Disable(void)
 {
     esp_ble_gap_stop_scanning();
+    BLE_Stop_Advertising();
     BLE_Reset_Beacon();
+}
+
+void BLE_Start_Advertising(void)
+{
+    esp_err_t ret;
+
+    /* Set advertising data with device name */
+    esp_ble_adv_data_t adv_data = {
+        .set_scan_rsp = false,
+        .include_name = true,
+        .include_txpower = true,
+        .min_interval = 0x20,
+        .max_interval = 0x40,
+        .appearance = 0x00,
+        .manufacturer_len = 0,
+        .p_manufacturer_data = NULL,
+        .service_data_len = 0,
+        .p_service_data = NULL,
+        .service_uuid_len = 0,
+        .p_service_uuid = NULL,
+        .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    };
+
+    ret = esp_ble_gap_config_adv_data(&adv_data);
+    if (ret) {
+        printf("gap config adv data failed: %s\n", esp_err_to_name(ret));
+        return;
+    }
+
+    /* Set advertising parameters */
+    esp_ble_adv_params_t adv_params = {
+        .adv_int_min = 0x20,     /* 20ms interval */
+        .adv_int_max = 0x40,    /* 40ms interval */
+        .adv_type = ADV_TYPE_IND,
+        .own_addr_type = BLE_ADDR_TYPE_RPA_PUBLIC,
+        .channel_map = ADV_CHNL_ALL,
+        .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+    };
+
+    /* Start advertising */
+    ret = esp_ble_gap_start_advertising(&adv_params);
+    if (ret) {
+        printf("gap start adv failed: %s\n", esp_err_to_name(ret));
+        return;
+    }
+
+    printf("BLE advertising started as 'Dragon Radar'\n");
+}
+
+void BLE_Stop_Advertising(void)
+{
+    esp_ble_gap_stop_advertising();
 }
