@@ -24,3 +24,7 @@ void WIFI_Init(void *arg);
 uint16_t WIFI_Scan(void);
 void BLE_Init(void *arg);
 uint16_t BLE_Scan(void);
+int BLE_Get_Device_RSSI(int index);
+int BLE_Get_Num_Devices(void);
+bool BLE_Is_Device_Found(int index);
+void BLE_Reset_Beacon(void);

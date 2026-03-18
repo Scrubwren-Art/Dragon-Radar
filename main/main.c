@@ -53,7 +53,7 @@ void Driver_Init(void)
 void app_main(void)
 {
     button_Init();
-    // Wireless_Init();  /* Disabled: WiFi/BLE not needed */
+    Wireless_Init();  /* Enable BLE for beacon tracking */
     Driver_Init();
     LCD_Init();
     // SD_Init();  /* Disabled: SD card not needed */

@@ -2,6 +2,7 @@
 #include "QMI8658.h"
 #include "Buzzer.h"
 #include "BAT_Driver.h"
+#include "Wireless.h"
 #include <math.h>
 #include <float.h>
 #include <stdio.h>
@@ -10,10 +11,10 @@
 
 #define ROWS 10
 #define COLS 10
-#define NUM_TARGETS 7
+#define NUM_TARGETS 0
 #define MAX_DISTANCE 50.0f
-#define DOT_SIZE_MIN 8
-#define DOT_SIZE_MAX 15
+#define DOT_SIZE_MIN 10
+#define DOT_SIZE_MAX 20
 
 /* Static variables for grid state */
 static lv_obj_t *grid_screen = NULL;
@@ -86,10 +87,10 @@ static void draw_center_triangle(lv_draw_ctx_t *draw_ctx, int cx, int cy, int si
 	int x1 = cx; /* Top */
 	int y1 = (int)(cy - height / 2);
 
-	int x2 = (int)(cx - size * 0.75f); /* Bottom-left */
+	int x2 = (int)(cx - size / 2); /* Bottom-left */
 	int y2 = (int)(cy + height / 2);
 
-	int x3 = (int)(cx + size * 0.75f); /* Bottom-right */
+	int x3 = (int)(cx + size / 2); /* Bottom-right */
 	int y3 = (int)(cy + height / 2);
 
 	/* Draw filled triangle using scanlines */
@@ -131,15 +132,85 @@ static void draw_center_triangle(lv_draw_ctx_t *draw_ctx, int cx, int cy, int si
 	lv_draw_line(draw_ctx, &outline_dsc, &p3, &p1);
 }
 
-/* Helper: Draw a fuzzy yellow dot at world position */
-static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
-													 float distance_from_center)
+/* Helper: Draw a filled triangle pointing in a given direction */
+static void draw_triangle(lv_draw_ctx_t *draw_ctx, int cx, int cy, float dir_x, float dir_y, int size, lv_color_t color)
 {
+	int half = size / 2;
+	float perp_x = -dir_y;
+	float perp_y = dir_x;
+
+	int x1 = cx + (int)(dir_x * size);
+	int y1 = cy + (int)(dir_y * size);
+
+	int x2 = cx + (int)(-dir_x * half + perp_x * half);
+	int y2 = cy + (int)(-dir_y * half + perp_y * half);
+
+	int x3 = cx + (int)(-dir_x * half - perp_x * half);
+	int y3 = cy + (int)(-dir_y * half - perp_y * half);
+
+	int min_y = y1;
+	int max_y = y1;
+	if (y2 < min_y) min_y = y2;
+	if (y3 < min_y) min_y = y3;
+	if (y2 > max_y) max_y = y2;
+	if (y3 > max_y) max_y = y3;
+
+	if (min_y == max_y) return;
+
+	lv_draw_line_dsc_t line_dsc;
+	lv_draw_line_dsc_init(&line_dsc);
+	line_dsc.color = color;
+	line_dsc.width = 2;
+
+	for (int y = min_y; y <= max_y; y++)
+	{
+		float x_intersect[3] = {0, 0, 0};
+		int intersect_count = 0;
+
+		if (y1 != y2) {
+			float t = (float)(y - y1) / (float)(y2 - y1);
+			if (t >= 0.0f && t <= 1.0f) {
+				x_intersect[intersect_count++] = x1 + t * (x2 - x1);
+			}
+		}
+		if (y1 != y3) {
+			float t = (float)(y - y1) / (float)(y3 - y1);
+			if (t >= 0.0f && t <= 1.0f) {
+				x_intersect[intersect_count++] = x1 + t * (x3 - x1);
+			}
+		}
+		if (y2 != y3) {
+			float t = (float)(y - y2) / (float)(y3 - y2);
+			if (t >= 0.0f && t <= 1.0f) {
+				x_intersect[intersect_count++] = x2 + t * (x3 - x2);
+			}
+		}
+
+		if (intersect_count >= 2) {
+			float x_a = x_intersect[0];
+			float x_b = x_intersect[0];
+			for (int i = 1; i < intersect_count; i++) {
+				if (x_intersect[i] < x_a) x_a = x_intersect[i];
+				if (x_intersect[i] > x_b) x_b = x_intersect[i];
+			}
+			lv_point_t p1 = {(lv_coord_t)x_a, (lv_coord_t)y};
+			lv_point_t p2 = {(lv_coord_t)x_b, (lv_coord_t)y};
+			lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
+		}
+	}
+}
+
+/* Helper: Draw radar dot with size based on position from center (for fake radar dots) */
+static void draw_radar_dot(lv_draw_ctx_t *draw_ctx, int px, int py, bool flash)
+{
+	// Skip drawing on every other flash cycle for flashing effect
+	uint32_t flash_tick = lv_tick_get() / 700; // Slightly slower at 700ms
+	if (flash && (flash_tick & 1) != 0) return;
+
 	int scr_w = lv_disp_get_hor_res(NULL);
 	int scr_h = lv_disp_get_ver_res(NULL);
 
-	/* Calculate dot size and color based on distance from center of display
-	 * Center (0,0) relative = largest/whitest, edges = smallest/yellowest */
+	/* Calculate dot size based on distance from center of display */
 	int center_x = scr_w / 2;
 	int center_y = scr_h / 2;
 
@@ -149,30 +220,72 @@ static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
 	float dist_to_center = sqrtf((float)(dx * dx + dy * dy));
 
 	/* Max distance is diagonal from center to corner */
-	float max_dist = sqrtf((float)(center_x * center_x + center_y * center_y)) - 10.0f; /* Subtract small margin to avoid zero size at corners */
+	float max_dist = sqrtf((float)(center_x * center_x + center_y * center_y)) - 10.0f;
 
 	/* Normalize distance to 0-1 range (0 at center, 1 at corners) */
 	float normalized_dist = dist_to_center / max_dist;
-	if (normalized_dist > 1.0f)
-		normalized_dist = 1.0f;
+	if (normalized_dist > 1.0f) normalized_dist = 1.0f;
 
 	/* Size: larger at center (0), smaller at edges (1) */
 	int dot_size = DOT_SIZE_MAX - (int)(normalized_dist * (float)(DOT_SIZE_MAX - DOT_SIZE_MIN));
-	if (dot_size < DOT_SIZE_MIN)
-		dot_size = DOT_SIZE_MIN;
+	if (dot_size < DOT_SIZE_MIN) dot_size = DOT_SIZE_MIN;
 
-	/* Color: bright orange closer to center, bright yellow at edges */
+	/* Color: bright yellow closer to center, bright orange at edges */
 	lv_color_t dot_color;
 	if (normalized_dist < 0.5f)
-	{
-		/* Center: bright orange */
-		dot_color = lv_color_hex(0xFF9000);
-	}
+		dot_color = lv_color_hex(0xFFAA00);
 	else
-	{
-		/* Edges: bright yellow (avoids blue tint) */
-		dot_color = lv_color_hex(0xFFEAA00);
-	}
+		dot_color = lv_color_hex(0xFFBB00);
+
+	/* Draw circle */
+	lv_draw_rect_dsc_t rect_dsc;
+	lv_draw_rect_dsc_init(&rect_dsc);
+	rect_dsc.radius = LV_RADIUS_CIRCLE;
+	rect_dsc.bg_opa = LV_OPA_COVER;
+	rect_dsc.bg_color = dot_color;
+	rect_dsc.border_width = 0;
+	rect_dsc.shadow_width = 40;
+	rect_dsc.shadow_color = dot_color;
+	rect_dsc.shadow_opa = LV_OPA_90;
+	rect_dsc.shadow_ofs_x = 0;
+	rect_dsc.shadow_ofs_y = 0;
+
+	lv_area_t area;
+	area.x1 = px - dot_size / 2;
+	area.y1 = py - dot_size / 2;
+	area.x2 = px + dot_size / 2;
+	area.y2 = py + dot_size / 2;
+
+	lv_draw_rect(draw_ctx, &rect_dsc, &area);
+}
+
+/* Helper: Draw a fuzzy yellow dot at world position */
+static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py, float distance_from_center, bool flash)
+{
+	// Skip drawing on every other flash cycle for flashing effect
+	uint32_t flash_tick = lv_tick_get() / 700; // Slower at 700ms
+	if (flash && (flash_tick & 1) != 0) return;
+
+	int scr_w = lv_disp_get_hor_res(NULL);
+	int scr_h = lv_disp_get_ver_res(NULL);
+
+	/* Calculate dot size based on distance_from_center parameter
+	 * 0.0 = closest (DOT_SIZE_MAX), 1.0 = furthest (DOT_SIZE_MIN) */
+	float normalized_dist = distance_from_center;
+	if (normalized_dist < 0.0f) normalized_dist = 0.0f;
+	if (normalized_dist > 1.0f) normalized_dist = 1.0f;
+
+	/* Size: larger when close (0), smaller when far (1) */
+	int dot_size = DOT_SIZE_MAX - (int)(normalized_dist * (float)(DOT_SIZE_MAX - DOT_SIZE_MIN));
+	if (dot_size < DOT_SIZE_MIN) dot_size = DOT_SIZE_MIN;
+	if (dot_size > DOT_SIZE_MAX) dot_size = DOT_SIZE_MAX;
+
+	/* Color: bright yellow closer to center, bright orange at edges */
+	lv_color_t dot_color;
+	if (normalized_dist < 0.5f)
+		dot_color = lv_color_hex(0xFFAA00);
+	else
+		dot_color = lv_color_hex(0xFFBB00);
 
 	/* Draw circle using rect with circular radius */
 	lv_draw_rect_dsc_t rect_dsc;
@@ -182,10 +295,10 @@ static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
 	rect_dsc.bg_color = dot_color;
 	rect_dsc.border_width = 0;
 
-	/* Enhanced glow/shadow effect with higher opacity for brightness */
-	rect_dsc.shadow_width = 40; /* Larger blur radius for more glow */
+	/* Enhanced glow/shadow effect */
+	rect_dsc.shadow_width = 40;
 	rect_dsc.shadow_color = dot_color;
-	rect_dsc.shadow_opa = LV_OPA_90; /* More opaque shadow for brighter glow */
+	rect_dsc.shadow_opa = LV_OPA_90;
 	rect_dsc.shadow_ofs_x = 0;
 	rect_dsc.shadow_ofs_y = 0;
 
@@ -199,54 +312,95 @@ static void draw_fuzzy_dot(lv_draw_ctx_t *draw_ctx, int px, int py,
 	lv_draw_rect(draw_ctx, &rect_dsc, &area);
 }
 
-/* Helper: Draw a dotted line from one point to another with animation */
-static void draw_dotted_line(lv_draw_ctx_t *draw_ctx, int x1, int y1, int x2, int y2, lv_color_t color)
+/* Helper: Draw a curved dotted line from center to beacon with animation */
+static void draw_curved_dotted_line(lv_draw_ctx_t *draw_ctx, int cx, int cy, int tx, int ty, float curvature, lv_color_t color, bool flash)
 {
-	int dx = x2 - x1;
-	int dy = y2 - y1;
+	int dx = tx - cx;
+	int dy = ty - cy;
 	float distance = sqrtf((float)(dx * dx + dy * dy));
-	
+
 	if (distance < 1.0f)
 		return;
-	
+
+	if (flash) {
+		uint32_t flash_tick = lv_tick_get() / 700;
+		if ((flash_tick & 1) != 0) return;
+	}
+
 	/* Normalize direction vector */
 	float dir_x = dx / distance;
 	float dir_y = dy / distance;
-	
-	/* Get current time for animation (pulsing effect) */
+
+	/* Control point for bezier curve (perpendicular offset) */
+	float ctrl_x = cx + dir_x * distance * 0.5f + dir_y * distance * curvature * 0.02f;
+	float ctrl_y = cy + dir_y * distance * 0.5f - dir_x * distance * curvature * 0.02f;
+
+	/* Animation offset */
 	uint32_t current_time = lv_tick_get();
-	float animation_offset = ((current_time / 250) % 14) / 14.0f * distance; /* Complete cycle every ~3500ms */
-	
-	/* Dotted line: 8 pixels on, 6 pixels off */
-	float pos = -animation_offset;
+	float animation_offset = ((current_time / 250) % 14) / 14.0f * distance;
+
+	/* Dotted line parameters */
+	float dot_length = 8.0f;
+	float gap_length = 6.0f;
+	float segment_length = dot_length + gap_length;
+
 	lv_draw_line_dsc_t line_dsc;
 	lv_draw_line_dsc_init(&line_dsc);
 	line_dsc.color = color;
 	line_dsc.width = 2;
-	
+
+	/* Pre-calculate bezier curve points */
+	int num_points = (int)(distance * 0.5f);
+	if (num_points < 10) num_points = 10;
+	if (num_points > 100) num_points = 100;
+
+	float bx[101];
+	float by[101];
+	for (int i = 0; i <= num_points; i++) {
+		float t = i / (float)num_points;
+		float one_minus_t = 1.0f - t;
+		bx[i] = one_minus_t * one_minus_t * cx + 2 * one_minus_t * t * ctrl_x + t * t * tx;
+		by[i] = one_minus_t * one_minus_t * cy + 2 * one_minus_t * t * ctrl_y + t * t * ty;
+	}
+
+	/* Ensure last point is exactly at target */
+	bx[num_points] = tx;
+	by[num_points] = ty;
+
+	/* Draw dotted curve */
+	float pos = -animation_offset;
 	while (pos < distance)
 	{
 		float seg_start = pos;
-		float seg_end = pos + 8.0f;
+		float seg_end = pos + dot_length;
 		if (seg_end > distance)
 			seg_end = distance;
-		
+
 		if (seg_start < 0.0f)
 			seg_start = 0.0f;
-		
+
 		if (seg_start < seg_end)
 		{
-			int px1 = (int)(x1 + dir_x * seg_start);
-			int py1 = (int)(y1 + dir_y * seg_start);
-			int px2 = (int)(x1 + dir_x * seg_end);
-			int py2 = (int)(y1 + dir_y * seg_end);
-			
-			lv_point_t p1 = {(lv_coord_t)px1, (lv_coord_t)py1};
-			lv_point_t p2 = {(lv_coord_t)px2, (lv_coord_t)py2};
-			lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
+			/* Find starting and ending indices in bezier array */
+			int start_idx = (int)(seg_start / distance * num_points);
+			int end_idx = (int)(seg_end / distance * num_points);
+			if (start_idx > end_idx) {
+				int tmp = start_idx;
+				start_idx = end_idx;
+				end_idx = tmp;
+			}
+			if (start_idx < 0) start_idx = 0;
+			if (end_idx > num_points) end_idx = num_points;
+
+			/* Draw connected line segments along curve */
+			for (int i = start_idx; i < end_idx; i++) {
+				lv_point_t p1 = {(lv_coord_t)bx[i], (lv_coord_t)by[i]};
+				lv_point_t p2 = {(lv_coord_t)bx[i + 1], (lv_coord_t)by[i + 1]};
+				lv_draw_line(draw_ctx, &line_dsc, &p1, &p2);
+			}
 		}
-		
-		pos += 14.0f; /* 8 on + 6 off */
+
+		pos += segment_length;
 	}
 }
 
@@ -256,8 +410,16 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 	lv_draw_ctx_t *draw_ctx = lv_event_get_draw_ctx(e);
 	lv_obj_t *obj = lv_event_get_target(e);
 
-	int scr_w = lv_obj_get_width(obj);
-	int scr_h = lv_obj_get_height(obj);
+	int scr_w = lv_disp_get_hor_res(NULL);
+	int scr_h = lv_disp_get_ver_res(NULL);
+
+	/* Draw dark green background first */
+	lv_draw_rect_dsc_t bg_dsc;
+	lv_draw_rect_dsc_init(&bg_dsc);
+	bg_dsc.bg_color = lv_color_hex(0x008407);
+	bg_dsc.bg_opa = LV_OPA_COVER;
+	lv_area_t bg_area = {0, 0, scr_w - 1, scr_h - 1};
+	lv_draw_rect(draw_ctx, &bg_dsc, &bg_area);
 
 	/* Calculate zoom-dependent grid spacing */
 	float zoom_multiplier = 1.0f + (zoom_level * 0.25f);
@@ -344,7 +506,7 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 		 * Center at screen center, scale to fit
 		 * Approximately 1/5 of screen width/height is the visible range */
 		float zoom_multiplier = 1.0f + (zoom_level * 0.25f); /* 1.0, 1.25, 1.5, 1.75 */
-		float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.8f * zoom_multiplier;
+		float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.70f * zoom_multiplier;
 		int px = scr_w / 2 + (int)(x * scale);
 		int py = scr_h / 2 - (int)(y * scale); /* Negative because Y grows downward */
 
@@ -376,19 +538,116 @@ static void draw_grid_and_radar_cb(lv_event_t *e)
 		if (py >= scr_h)
 			py = scr_h - 1;
 
-		/* Draw the fuzzy yellow dot at exact pixel coordinates */
-		draw_fuzzy_dot(draw_ctx, px, py, distance);
+		/* Draw the radar dot at exact pixel coordinates (with flashing) */
+		draw_radar_dot(draw_ctx, px, py, true);
 	}
 
-	/* Draw dotted line from center to closest dot (only after scan completes) */
-	if (closest_dot_idx >= 0 && !in_scan_mode)
+	/* Draw dotted line from center to closest BLE device */
+	int num_devices = BLE_Get_Num_Devices();
+	if (num_devices > 0)
 	{
-		draw_dotted_line(draw_ctx, scr_w / 2, scr_h / 2, closest_px, closest_py, closest_color);
+		// Find closest BLE device (strongest signal = highest RSSI = least negative)
+		int closest_rssi = -100;
+		int closest_device = 0;
+		for (int d = 0; d < num_devices; d++)
+		{
+			int rssi = BLE_Get_Device_RSSI(d);
+			if (rssi > closest_rssi)
+			{
+				closest_rssi = rssi;
+				closest_device = d;
+			}
+		}
+
+		// Calculate position of closest device (same as dot calculation)
+		int measured_power = -75;
+		float distance = powf(10.0f, (measured_power - closest_rssi) / 20.0f);
+		if (distance < 0.05f) distance = 0.05f;
+		if (distance > 2.0f) distance = 2.0f; // Match dot max
+
+		float zoom_multiplier = 1.0f + (zoom_level * 0.25f);
+		float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.85f * zoom_multiplier; // Match dot scale
+		int beacon_dist_px = (int)(distance * MAX_DISTANCE * scale);
+
+		// Fixed angle based on device index - stays in same position
+		float base_angle = (float)closest_device * (360.0f / 7.0f);
+		float beacon_rad = base_angle * 3.14159265f / 180.0f;
+		int beacon_x = scr_w / 2 + (int)(beacon_dist_px * sinf(beacon_rad));
+		int beacon_y = scr_h / 2 - (int)(beacon_dist_px * cosf(beacon_rad));
+
+		// Curved dotted line to closest beacon (with flash)
+		draw_curved_dotted_line(draw_ctx, scr_w / 2, scr_h / 2, beacon_x, beacon_y, closest_device, lv_color_hex(0xFFBB00), true);
 	}
 
 	/* Draw red triangle at center */
 	draw_center_triangle(draw_ctx, scr_w / 2, scr_h / 2, DOT_SIZE_MAX);
-}
+
+	/* Draw BLE dots on top of everything */
+	int ble_device_count = BLE_Get_Num_Devices();
+	if (ble_device_count > 7) ble_device_count = 7;
+	for (int d = 0; d < ble_device_count; d++)
+	{
+		if (BLE_Is_Device_Found(d))
+		{
+			int rssi = BLE_Get_Device_RSSI(d);
+			int measured_power = -75;
+			float ble_distance = powf(10.0f, (measured_power - rssi) / 20.0f);
+			if (ble_distance < 0.05f) ble_distance = 0.05f;
+			// Allow distance > 1.0 so weak signals extend outside screen
+			if (ble_distance > 2.0f) ble_distance = 2.0f; // Max extends to 2x screen radius
+
+			float zoom_multiplier = 1.0f + (zoom_level * 0.25f);
+			float scale = (float)scr_w / (MAX_DISTANCE * 2.0f) * 0.85f * zoom_multiplier;
+			int beacon_dist_px = (int)(ble_distance * MAX_DISTANCE * scale);
+
+			float base_angle = (float)d * (360.0f / 7.0f);
+			float beacon_rad = base_angle * 3.14159265f / 180.0f;
+			int beacon_x = scr_w / 2 + (int)(beacon_dist_px * sinf(beacon_rad));
+			int beacon_y = scr_h / 2 - (int)(beacon_dist_px * cosf(beacon_rad));
+
+			// Use draw_fuzzy_dot for glowing yellow beacon (no clamping - allows outside screen)
+			draw_fuzzy_dot(draw_ctx, beacon_x, beacon_y, ble_distance, true);
+
+			// Draw edge indicator if dot is outside screen
+			if (beacon_x < 0 || beacon_x >= scr_w || beacon_y < 0 || beacon_y >= scr_h)
+			{
+					// Calculate direction from center to beacon
+					float dir_x = beacon_x - (float)(scr_w / 2);
+					float dir_y = beacon_y - (float)(scr_h / 2);
+					float dir_len = sqrtf(dir_x * dir_x + dir_y * dir_y);
+					if (dir_len > 0.0f)
+					{
+						dir_x /= dir_len;
+						dir_y /= dir_len;
+
+						// Position indicator 40px from edge toward center
+						float edge_margin = 40.0f;
+						float half_w = (float)(scr_w / 2) - edge_margin;
+						float half_h = (float)(scr_h / 2) - edge_margin;
+
+						// Calculate intersection point with rectangle edge
+						float t = 10000.0f;
+						if (dir_x > 0.01f) { t = fminf(t, half_w / dir_x); }
+						if (dir_x < -0.01f) { t = fminf(t, -half_w / dir_x); }
+						if (dir_y > 0.01f) { t = fminf(t, half_h / dir_y); }
+						if (dir_y < -0.01f) { t = fminf(t, -half_h / dir_y); }
+
+						int ind_x = (int)((float)(scr_w / 2) + dir_x * t);
+						int ind_y = (int)((float)(scr_h / 2) + dir_y * t);
+
+						// Clamp to screen bounds
+						if (ind_x < 5) { ind_x = 5; }
+						if (ind_x >= scr_w - 5) { ind_x = scr_w - 6; }
+						if (ind_y < 5) { ind_y = 5; }
+						if (ind_y >= scr_h - 5) { ind_y = scr_h - 6; }
+
+						// Draw small triangle pointing outward (same direction as beacon)
+						draw_triangle(draw_ctx, ind_x, ind_y, dir_x, dir_y, 10, lv_color_hex(0xFF0000));
+					}
+				}
+			}
+		}
+	}
 
 /* Initialize the grid screen with radar */
 void grid_screen_show(void)
@@ -403,19 +662,16 @@ void grid_screen_show(void)
 
 	/* Create a fresh screen */
 	grid_screen = lv_obj_create(NULL);
-
-	/* Set dark green background */
-	lv_obj_set_style_bg_color(grid_screen, lv_color_hex(0x003300), 0);
-	lv_obj_set_style_bg_opa(grid_screen, LV_OPA_COVER, 0);
+	lv_scr_load(grid_screen);
 
 	/* Attach draw callback to render grid and radar */
-	lv_obj_add_event_cb(grid_screen, draw_grid_and_radar_cb, LV_EVENT_DRAW_MAIN, NULL);
+	lv_obj_add_event_cb(grid_screen, draw_grid_and_radar_cb, LV_EVENT_DRAW_MAIN_END, NULL);
 
 	/* Create battery container with background color and border */
 	battery_container = lv_obj_create(grid_screen);
 	lv_obj_set_size(battery_container, 70, 28);
 	lv_obj_set_pos(battery_container, (lv_coord_t)((lv_disp_get_hor_res(NULL) - 70) / 2), 10);
-	lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x003300), 0);
+	lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x008407), 0);
 	lv_obj_set_style_bg_opa(battery_container, LV_OPA_COVER, 0);
 	lv_obj_set_style_border_color(battery_container, lv_color_hex(0x000000), 0);
 	lv_obj_set_style_border_width(battery_container, 2, 0);
@@ -516,11 +772,11 @@ void grid_screen_update(void)
 		float voltage = BAT_Get_Volts();
 		static char bat_text[12];
 		
-		/* Show "Charging" if voltage >= 4.15V (charging voltage) */
-		if (voltage >= 4.15f)
+		/* Show "Charging" if voltage >= 4.17V (charging voltage) */
+		if (voltage >= 4.17f)
 		{
 			snprintf(bat_text, sizeof(bat_text), "Charging");
-			lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x003300), 0);
+			lv_obj_set_style_bg_color(battery_container, lv_color_hex(0x008407), 0);
 			smoothed_battery_pct = -1;
 		}
 		else
@@ -543,7 +799,7 @@ void grid_screen_update(void)
 			/* Set box color based on percentage */
 			lv_color_t box_color;
 			if (display_pct >= 50)
-				box_color = lv_color_hex(0x003300); /* Green */
+				box_color = lv_color_hex(0x008407); /* Green */
 			else if (display_pct >= 20)
 				box_color = lv_color_hex(0xFFA500); /* Orange */
 			else
