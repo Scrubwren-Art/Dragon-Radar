@@ -106,8 +106,8 @@ void app_main(void)
         if (display_active && !was_sleeping)
         {
             uint32_t idle_time = current_time - last_activity_time;
-            if (idle_time > 30000)
-            {                     /* 30 seconds */
+            if (idle_time > 120000)
+            {                     /* 120 seconds */
                 /* Enter light sleep mode to save power */
                 Set_Backlight(0);      /* Turn off backlight */
                 BLE_Disable();         /* Disable BLE to save power */
